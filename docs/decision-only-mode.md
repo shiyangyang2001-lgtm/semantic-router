@@ -8,8 +8,6 @@
 
 Decision-Only 模式提供配置开关、请求流程接入、决策结果整理和 JSON 响应能力。
 
-基线为官方 `v0.3.0`，提交号为 `9afc5a421886f44085f9070a8fbd878b80724f64`。本功能直接适配该基线，不依赖 0.4.0 的 `KeystoneHeaderOptions` 或配套响应头常量。
-
 ## 请求处理流程
 
 ```text
@@ -107,11 +105,11 @@ curl http://127.0.0.1:8801/v1/chat/completions \
 | `fallback` | 自动选模没有得到规则选择的类型，使用 `default_model` | 未命中规则，返回 `Fast` |
 | `passthrough` | 请求直接指定类型，保留该值 | 请求 `model: Pro`，返回 `Pro` |
 
-即使规则选出的类型恰好与默认类型相同，其来源仍为 `routing`。没有命中规则、但上游评估阶段已填入默认类型时，来源为 `fallback`；命中决策后使用默认类型的情况也标为 `fallback`。
+规则选出的类型即使与默认类型相同，来源仍为 `routing`。未命中规则，或命中决策但最终使用默认类型时，来源为 `fallback`。
 
 结果整理函数不检查端点是否配置、地址是否有效或后端是否在线，也不额外校验返回类型是否在端点配置中注册。类型到具体模型的映射由客户网关负责。
 
-保留 `content-type: application/json`、`x-selected-model` 和 `x-vsr-selected-model` 等原有响应头；有决策及有效置信度时附带相应原有响应头。本次不发送 `x-vsr-schema-version` 或 `x-vsr-response-path`。JSON 中的 `schema_version` 与这些响应头无关。
+响应头包含 `content-type: application/json`、`x-selected-model` 和 `x-vsr-selected-model`；有决策及有效置信度时附带相应响应头。
 
 ## 错误和主动跳过行为
 
@@ -171,5 +169,3 @@ cd src/semantic-router
 go test ./pkg/config -count=1
 go test -race ./pkg/config ./pkg/extproc -run '^TestDecisionOnly' -count=1
 ```
-
-这些命令验证配置和请求处理逻辑，不替代 Docker 部署验收。
