@@ -167,6 +167,7 @@ type LLMObservability struct {
 }
 
 type RouterOptions struct {
+	DecisionOnlyMode          bool                 `yaml:"decision_only_mode,omitempty"`
 	AutoModelName             string               `yaml:"auto_model_name,omitempty"`
 	IncludeConfigModelsInList bool                 `yaml:"include_config_models_in_list,omitempty"`
 	ClearRouteCache           bool                 `yaml:"clear_route_cache"`

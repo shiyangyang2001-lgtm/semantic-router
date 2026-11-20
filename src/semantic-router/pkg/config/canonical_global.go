@@ -19,6 +19,7 @@ type CanonicalGlobal struct {
 
 // CanonicalRouterGlobal captures router-engine control knobs.
 type CanonicalRouterGlobal struct {
+	DecisionOnlyMode          bool                  `yaml:"decision_only_mode"`
 	ConfigSource              ConfigSource          `yaml:"config_source,omitempty"`
 	Strategy                  string                `yaml:"strategy,omitempty"`
 	AutoModelName             string                `yaml:"auto_model_name,omitempty"`
@@ -205,6 +206,7 @@ func applyCanonicalGlobal(cfg *RouterConfig, global *CanonicalGlobal) error {
 		return nil
 	}
 
+	cfg.DecisionOnlyMode = global.Router.DecisionOnlyMode
 	cfg.ConfigSource = global.Router.ConfigSource
 	cfg.Strategy = global.Router.Strategy
 	cfg.AutoModelName = global.Router.AutoModelName

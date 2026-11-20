@@ -15,6 +15,7 @@ func DefaultCanonicalGlobal() CanonicalGlobal {
 
 func defaultCanonicalRouterGlobal() CanonicalRouterGlobal {
 	return CanonicalRouterGlobal{
+		DecisionOnlyMode:          false,
 		ConfigSource:              ConfigSourceFile,
 		AutoModelName:             "MoM",
 		IncludeConfigModelsInList: false,

@@ -113,6 +113,15 @@ func (r *OpenAIRouter) runRequestPreRoutingStages(
 		return requestDecisionState{}, r.createErrorResponse(403, authzErr.Error())
 	}
 
+	state := requestDecisionState{
+		decisionName:      decisionName,
+		reasoningDecision: reasoningDecision,
+		selectedModel:     selectedModel,
+	}
+	if r.decisionOnlyModeEnabled() {
+		return state, nil
+	}
+
 	metrics.RecordModelRequest(selectedModel)
 	ctx.InflightToken = inflight.Begin(selectedModel)
 	if resp := r.handleFastResponse(ctx, decisionName); resp != nil {
@@ -133,11 +142,7 @@ func (r *OpenAIRouter) runRequestPreRoutingStages(
 		return requestDecisionState{}, r.createErrorResponse(503, fmt.Sprintf("RAG retrieval failed: %v", ragErr))
 	}
 
-	return requestDecisionState{
-		decisionName:      decisionName,
-		reasoningDecision: reasoningDecision,
-		selectedModel:     selectedModel,
-	}, nil
+	return state, nil
 }
 
 func (r *OpenAIRouter) applyRateLimitAndCacheChecks(

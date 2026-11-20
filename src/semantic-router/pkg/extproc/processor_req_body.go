@@ -74,6 +74,9 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
 	if earlyResponse != nil {
 		return earlyResponse, nil
 	}
+	if r.decisionOnlyModeEnabled() {
+		return r.buildDecisionOnlySelectedModelResponse(originalModel, decisionState, ctx), nil
+	}
 
 	openAIRequest, earlyResponse, err := r.prepareRequestForModelRouting(requestBody, fast.UserContent, ctx)
 	if earlyResponse != nil {
