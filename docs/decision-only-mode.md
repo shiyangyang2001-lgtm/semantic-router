@@ -6,7 +6,7 @@
 
 ## 功能范围
 
-Decision-Only 模式提供配置开关、请求流程接入、决策结果整理和 JSON 响应能力，并在 `debug` 中返回决策依据及分阶段耗时。
+Decision-Only 模式提供配置开关、请求流程接入、决策结果整理和 JSON 响应能力，并在 `debug` 中返回决策依据及分阶段耗时；启用 Router Replay 后，可保存请求和决策结果供后续查询。
 
 ## 请求处理流程
 
@@ -14,6 +14,7 @@ Decision-Only 模式提供配置开关、请求流程接入、决策结果整理
 客户网关发送请求
   → SR 提取请求内容并执行原有规则判断
   → 得到规则选出的类型，或使用默认类型
+  → 按 Router Replay 配置记录请求和决策结果
   → 返回决策 JSON
   → 客户网关将类型映射到具体模型并发起调用
 ```
@@ -152,6 +153,18 @@ curl http://127.0.0.1:8801/v1/chat/completions \
 
 消息和工具统计来自已解析的请求，即使没有配置决策规则或消息内容为空，也会记录实际数量。可选的信号评分、耗时、压缩比例和候选权重出现 `NaN` 或无穷大时，对应数值会省略，避免这些附加信息影响有效决策结果的返回。
 
+## 请求记录与查询
+
+Decision-Only 成功构建响应后，通过原有 Router Replay 链路保存记录，供 Insights 页面或查询接口使用。记录包括请求 ID、请求中的类型、最终类型、命中决策、信号、HTTP 200 状态，以及按采集配置保存的请求体和决策响应 JSON；响应 JSON 中保留 `debug`。
+
+沿用 `global.services.router_replay` 的启用及存储配置，以及决策中的 `router_replay` 插件覆盖配置，无需增加专用开关。例如，启用 PostgreSQL 存储时，记录写入既有 Replay 表。未命中规则而使用默认类型、或请求直接指定类型时，也按全局 Replay 配置记录；未启用或没有可用 recorder 时不记录。
+
+插件配置中的 `capture_request_body`、`capture_response_body` 分别控制两种正文的采集，`max_body_bytes` 控制单个正文的长度上限。超限记录会标记截断，实际返回给网关的 JSON 保持完整。上下文 Token 统计保存在决策响应的 `debug.context.context_tokens` 中。
+
+创建记录并取得 ID 后，响应头附带 `x-vsr-replay-id`，可用于定位对应记录。SR 未调用后端模型，因此模型调用的输入、缓存、输出和总 Token 用量，以及实际费用、基准费用和节省费用均记为 0。即使请求包含 `stream: true`，记录也标记为非流式响应。
+
+存储创建或更新返回错误时，仍返回正常决策结果；创建失败时不附带记录 ID。记录操作复用既有同步或异步写入设置，存储变慢或队列阻塞仍可能增加返回耗时。`debug.timings.total_ms` 在组装决策响应时计算，不包含后续 Replay 写入耗时。请求校验、选模或响应序列化失败时，不创建成功记录。
+
 ## 错误和主动跳过行为
 
 以下情况仍会返回错误：
@@ -176,7 +189,7 @@ Decision-Only 不改变两条原有的主动跳过路径：
 
 | 文件 | 新增行数 | 删除行数 | 改动内容 |
 | --- | ---: | ---: | --- |
-| `processor_req_body_decision_only.go` | 111 | 0 | 模式判断、最终结果整理、JSON 响应构建 |
+| `processor_req_body_decision_only.go` | 155 | 0 | 模式判断、最终结果整理、JSON 响应构建及 Replay 记录接入 |
 | `processor_req_body_decision_debug.go` | 304 | 0 | 记录消息统计、计算耗时、处理异常调试数值并组装调试信息 |
 | `processor_req_body_decision_debug_types.go` | 136 | 0 | 定义调试 JSON 字段和耗时数据结构 |
 | `processor_req_body.go` | 7 | 0 | 请求提取和预路由计时、直接返回决策 JSON |
@@ -185,7 +198,8 @@ Decision-Only 不改变两条原有的主动跳过路径：
 | `req_filter_classification_runtime.go` | 10 | 0 | 记录信号、决策和候选选择耗时及命中依据 |
 | `req_filter_classification_signal.go` | 66 | 6 | 记录压缩状态、耗时和实际命中关键词 |
 | `request_context.go` | 8 | 0 | 保存本次请求的调试信息 |
-| 合计 | 660 | 11 | 净增加 649 行 |
+| `recorder.go` | 1 | 1 | 按请求体采集开关决定是否保存原始请求体 |
+| 合计 | 705 | 12 | 净增加 693 行 |
 
 以上文件均位于 `src/semantic-router/pkg/extproc/`。
 
@@ -193,7 +207,7 @@ Decision-Only 不改变两条原有的主动跳过路径：
 
 ## 测试结果和复现
 
-新增 21 组测试，分布于以下文件：
+新增 26 组测试，分布于以下文件：
 
 | 测试文件 | 覆盖范围 |
 | --- | --- |
@@ -202,10 +216,11 @@ Decision-Only 不改变两条原有的主动跳过路径：
 | `pkg/extproc/processor_req_body_decision_only_flow_test.go` | 实际关键词规则与完整请求体处理、关闭模式、跳过后续插件、非法请求、SkipProcessing |
 | `pkg/extproc/processor_req_body_decision_only_grpc_test.go` | gRPC 请求头和请求体的完整交互、规则选择与兜底、无端点返回、`stream: true`、Looper 路径 |
 | `pkg/extproc/processor_req_body_decision_debug_test.go` | 调试 JSON、命中依据、候选信息、耗时、精度、空值、无规则及空内容的消息统计、异常数值、压缩状态、gRPC 调试信息及正常转发回归 |
+| `pkg/extproc/processor_req_body_decision_replay_test.go` | 规则、默认兜底和显式类型的记录，开关覆盖、正文采集与截断、存储报错、失败响应不记录、零用量及费用、gRPC 请求与记录 ID |
 
 测试文件路径相对于 `src/semantic-router/`。gRPC 测试使用内存连接和真实请求处理器，不依赖运行中的后端模型。
 
-验证结果：Go 路由器构建、仓库默认 Go 测试及 `agent-ci-gate` 通过；Decision-Only 单元与 gRPC 集成测试通过，竞态检查通过。Docker 镜像构建及实际部署验证尚未执行。
+验证结果：Go 路由器构建、仓库默认 Go 测试及 `agent-ci-gate` 通过；Decision-Only 单元与 gRPC 集成测试通过，竞态检查通过。Replay 测试使用内存存储及模拟报错存储；实际 PostgreSQL、Docker 镜像构建及部署验证尚未执行。
 
 准备 Go 1.24.1、C 编译器和本仓库所需的 Candle、ML、NLP 原生绑定库后，可在仓库根目录执行：
 

@@ -9,3 +9,4 @@
 - 新增可选的 Decision-Only 模式，默认关闭。开启后返回 `Pro` 等路由类型，由客户网关选择并调用具体模型，无需配置后端端点。
   配置、接口和测试说明见 [Decision-Only 功能说明](docs/decision-only-mode.md)。
 - 决策响应增加 `debug`，提供选中原因、命中规则与信号、候选类型、提示压缩状态、上下文统计和分阶段耗时。
+- Decision-Only 请求接入 Router Replay，按现有配置保存请求和决策结果，并返回 `x-vsr-replay-id` 供查询；模型调用用量和费用记录为 0。

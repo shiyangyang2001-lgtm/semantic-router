@@ -12,6 +12,7 @@ import (
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/headers"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/routerreplay"
 )
 
 const (
@@ -73,6 +74,10 @@ func (r *OpenAIRouter) buildDecisionOnlySelectedModelResponse(
 	if err != nil {
 		return r.createErrorResponse(http.StatusInternalServerError, "failed to build decision-only response")
 	}
+	r.recordDecisionOnlyRouterReplay(ctx, originalModel, selectedModel, body)
+	if ctx != nil {
+		appendOptionalHeader(&setHeaders, headers.RouterReplayID, ctx.RouterReplayID)
+	}
 	return &ext_proc.ProcessingResponse{
 		Response: &ext_proc.ProcessingResponse_ImmediateResponse{
 			ImmediateResponse: &ext_proc.ImmediateResponse{
@@ -81,6 +86,45 @@ func (r *OpenAIRouter) buildDecisionOnlySelectedModelResponse(
 				Body:    body,
 			},
 		},
+	}
+}
+
+func (r *OpenAIRouter) recordDecisionOnlyRouterReplay(
+	ctx *RequestContext,
+	originalModel string,
+	selectedModel string,
+	responseBody []byte,
+) {
+	if ctx == nil {
+		return
+	}
+
+	decisionName := decisionOnlyDecisionName(ctx)
+	if ctx.RouterReplayPluginConfig == nil {
+		ctx.RouterReplayPluginConfig = r.Config.EffectiveRouterReplayConfigForDecision(decisionName)
+	}
+	ctx.ExpectStreamingResponse = false
+	r.startRouterReplay(ctx, originalModel, selectedModel, decisionName)
+	if ctx.RouterReplayID == "" {
+		return
+	}
+
+	r.updateRouterReplayStatus(ctx, http.StatusOK, false)
+	r.updateRouterReplayUsageCost(ctx, decisionOnlyZeroUsageCost())
+	r.attachRouterReplayResponse(ctx, responseBody, true)
+}
+
+func decisionOnlyZeroUsageCost() routerreplay.UsageCost {
+	zeroTokens := 0
+	zeroCost := 0.0
+	return routerreplay.UsageCost{
+		PromptTokens:       &zeroTokens,
+		CachedPromptTokens: &zeroTokens,
+		CompletionTokens:   &zeroTokens,
+		TotalTokens:        &zeroTokens,
+		ActualCost:         &zeroCost,
+		BaselineCost:       &zeroCost,
+		CostSavings:        &zeroCost,
 	}
 }
 

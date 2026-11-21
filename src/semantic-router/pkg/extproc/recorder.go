@@ -238,7 +238,7 @@ func buildReplayRoutingRecord(
 		record.PreviousResponseID = ctx.ResponseAPICtx.PreviousResponseID
 		record.ConversationID = ctx.ResponseAPICtx.ConversationID
 	}
-	if len(ctx.OriginalRequestBody) > 0 {
+	if ctx.RouterReplayPluginConfig != nil && ctx.RouterReplayPluginConfig.CaptureRequestBody && len(ctx.OriginalRequestBody) > 0 {
 		record.RequestBody = string(ctx.OriginalRequestBody)
 	}
 
