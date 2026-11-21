@@ -64,6 +64,8 @@ func (r *OpenAIRouter) evaluateSignalsForDecision(
 	}
 
 	signalLatency := time.Since(signalStart).Milliseconds()
+	ctx.VSRDecisionTimings.SignalEvaluationMs = elapsedMilliseconds(signalStart)
+	ctx.VSRSignalMetrics = signals.Metrics
 	r.applySignalResultsToContext(ctx, signals)
 	ensureContextTokenCount(ctx, signalInput)
 	logSignalEvaluationResults(ctx, signalLatency, signals)
@@ -135,6 +137,9 @@ func (r *OpenAIRouter) runDecisionEngine(
 	ctx *RequestContext,
 	signals *classification.SignalResults,
 ) (*decision.DecisionResult, string) {
+	decisionStart := time.Now()
+	defer func() { ctx.VSRDecisionTimings.DecisionEvaluationMs = elapsedMilliseconds(decisionStart) }()
+
 	// llm_decision_evaluation_latency_seconds and llm_decision_match_total are
 	// emitted by decision.DecisionEngine.EvaluateDecisionsWithSignals; do not
 	// emit them here or both metrics will be double-counted.
@@ -181,6 +186,8 @@ func (r *OpenAIRouter) finalizeDecisionEvaluation(
 	evaluationConfidence := result.Confidence
 
 	ctx.VSRSelectedDecisionConfidence = evaluationConfidence
+	ctx.VSRDecisionMatchedRules = append([]string(nil), result.MatchedRules...)
+	ctx.VSRDecisionMatchedKeywords = append([]string(nil), result.MatchedKeywords...)
 	logging.ComponentDebugEvent("extproc", "decision_evaluated", map[string]interface{}{
 		"request_id":    ctx.RequestID,
 		"decision":      decisionName,
@@ -243,6 +250,9 @@ func (r *OpenAIRouter) selectDecisionRuntimeModel(
 	evaluationConfidence float64,
 	ctx *RequestContext,
 ) (string, entropy.ReasoningDecision) {
+	modelSelectionStart := time.Now()
+	defer func() { ctx.VSRDecisionTimings.ModelSelectionMs = elapsedMilliseconds(modelSelectionStart) }()
+
 	if len(result.Decision.ModelRefs) == 0 {
 		selectedModel := r.Config.DefaultModel
 		ctx.VSRSelectedModel = selectedModel

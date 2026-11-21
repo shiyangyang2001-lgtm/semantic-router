@@ -2,7 +2,9 @@ package extproc
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/classification"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
@@ -16,10 +18,25 @@ type signalEvaluationInput struct {
 	allMessagesText        string
 	compressedText         string
 	skipCompressionSignals map[string]bool
+	compressionInfo        promptCompressionRuntimeInfo
 	currentUserText        string
 	priorUserMessages      []string
 	hasAssistantReply      bool
 	conversationFacts      classification.ConversationFacts
+}
+
+type promptCompressionRuntimeInfo struct {
+	Enabled          bool
+	Applied          bool
+	Status           string
+	Profile          string
+	MaxTokens        int
+	MinLength        int
+	OriginalTokens   int
+	CompressedTokens int
+	Ratio            float64
+	SkippedSignals   []string
+	DurationMs       float64
 }
 
 func (r *OpenAIRouter) prepareSignalEvaluationInput(history signalConversationHistory) signalEvaluationInput {
@@ -63,32 +80,74 @@ func (r *OpenAIRouter) prepareSignalEvaluationInput(history signalConversationHi
 		return input
 	}
 
-	input.compressedText, input.skipCompressionSignals = r.compressSignalEvaluationText(input.evaluationText)
+	compressionStart := time.Now()
+	input.compressedText, input.skipCompressionSignals, input.compressionInfo = r.compressSignalEvaluationText(input.evaluationText)
+	input.compressionInfo.DurationMs = elapsedMilliseconds(compressionStart)
 	return input
 }
 
-func (r *OpenAIRouter) compressSignalEvaluationText(evaluationText string) (string, map[string]bool) {
+func (r *OpenAIRouter) compressSignalEvaluationText(evaluationText string) (string, map[string]bool, promptCompressionRuntimeInfo) {
 	compressedText := evaluationText
 	var skipCompressionSignals map[string]bool
+	info := promptCompressionRuntimeInfo{Enabled: r.Config.PromptCompression.Enabled}
 
 	if !r.Config.PromptCompression.Enabled || r.Config.PromptCompression.MaxTokens <= 0 {
-		return compressedText, skipCompressionSignals
+		info.Status = "disabled"
+		if r.Config.PromptCompression.Enabled {
+			info.Status = "max_tokens_unset"
+		}
+		info.Profile = r.Config.PromptCompression.NormalizedProfile()
+		info.MaxTokens = r.Config.PromptCompression.MaxTokens
+		info.MinLength = r.Config.PromptCompression.MinLength
+		return compressedText, skipCompressionSignals, info
 	}
 
 	cfg := buildCompressionConfig(r.Config.PromptCompression)
 	origTokens := promptcompression.CountTokensApprox(evaluationText)
+	info = promptCompressionRuntimeInfo{
+		Enabled:          true,
+		Status:           "within_token_budget",
+		Profile:          r.Config.PromptCompression.NormalizedProfile(),
+		MaxTokens:        cfg.MaxTokens,
+		MinLength:        r.Config.PromptCompression.MinLength,
+		OriginalTokens:   origTokens,
+		CompressedTokens: origTokens,
+		Ratio:            1.0,
+	}
 	if r.Config.PromptCompression.MinLength > 0 && len(evaluationText) <= r.Config.PromptCompression.MinLength {
 		logging.Infof("[PromptCompression] Skipped: %d chars <= min_length threshold %d", len(evaluationText), r.Config.PromptCompression.MinLength)
-		return compressedText, skipCompressionSignals
+		info.Status = "below_min_length"
+		return compressedText, skipCompressionSignals, info
 	}
 	if origTokens <= cfg.MaxTokens {
-		return compressedText, skipCompressionSignals
+		return compressedText, skipCompressionSignals, info
 	}
 
 	result := promptcompression.Compress(evaluationText, cfg)
 	logging.Infof("[PromptCompression] Compressed evaluationText: %d -> %d tokens (ratio=%.2f, kept %d sentences)",
 		result.OriginalTokens, result.CompressedTokens, result.Ratio, len(result.KeptIndices))
-	return result.Compressed, r.Config.PromptCompression.SkipSignalsSet()
+	skipCompressionSignals = r.Config.PromptCompression.SkipSignalsSet()
+	info.Applied = true
+	info.Status = "applied"
+	info.OriginalTokens = result.OriginalTokens
+	info.CompressedTokens = result.CompressedTokens
+	info.Ratio = result.Ratio
+	info.SkippedSignals = sortedSignalSet(skipCompressionSignals)
+	return result.Compressed, skipCompressionSignals, info
+}
+
+func sortedSignalSet(values map[string]bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value, enabled := range values {
+		if enabled {
+			out = append(out, value)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r *OpenAIRouter) applySignalResultsToContext(ctx *RequestContext, signals *classification.SignalResults) {
@@ -112,6 +171,7 @@ func (r *OpenAIRouter) applySignalResultsToContext(ctx *RequestContext, signals 
 	ctx.VSRMatchedConversation = signals.MatchedConversationRules
 	ctx.VSRMatchedEvent = signals.MatchedEventRules
 	ctx.VSRMatchedProjection = signals.MatchedProjectionRules
+	ctx.VSRMatchedKeywordTerms = append([]string(nil), signals.MatchedKeywords...)
 	ctx.VSRProjectionScores = cloneReplayFloat64Map(signals.ProjectionScores)
 	ctx.VSRSignalConfidences = cloneReplayFloat64Map(signals.SignalConfidences)
 	ctx.VSRSignalValues = cloneReplayFloat64Map(signals.SignalValues)

@@ -6,7 +6,7 @@
 
 ## 功能范围
 
-Decision-Only 模式提供配置开关、请求流程接入、决策结果整理和 JSON 响应能力。
+Decision-Only 模式提供配置开关、请求流程接入、决策结果整理和 JSON 响应能力，并在 `debug` 中返回决策依据及分阶段耗时。
 
 ## 请求处理流程
 
@@ -75,7 +75,7 @@ curl http://127.0.0.1:8801/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"help with coding"}]}'
 ```
 
-成功响应为 HTTP 200，核心字段示例如下；实际响应可额外包含 `category` 和 `confidence`：
+成功响应为 HTTP 200，核心字段示例如下；实际响应还包含 `debug`，并可包含 `category` 和 `confidence`：
 
 ```json
 {
@@ -98,6 +98,7 @@ curl http://127.0.0.1:8801/v1/chat/completions \
 | `decision` | 命中的决策名称；未命中时省略 |
 | `category` | 原有决策流程得到的分类；为空时省略 |
 | `confidence` | 命中决策的非负置信度，四舍五入到两位小数；无相应结果时省略，不代表后端模型回答质量 |
+| `debug` | 选中原因、决策依据、压缩情况、上下文统计和耗时明细 |
 
 | `selection_method` | 场景 | 结果示例 |
 | --- | --- | --- |
@@ -110,6 +111,46 @@ curl http://127.0.0.1:8801/v1/chat/completions \
 结果整理函数不检查端点是否配置、地址是否有效或后端是否在线，也不额外校验返回类型是否在端点配置中注册。类型到具体模型的映射由客户网关负责。
 
 响应头包含 `content-type: application/json`、`x-selected-model` 和 `x-vsr-selected-model`；有决策及有效置信度时附带相应响应头。
+
+## 调试信息
+
+正常的 Decision-Only 成功响应附带 `debug`，无需额外配置开关。
+
+| 字段 | 内容 |
+| --- | --- |
+| `debug.routing` | 请求类型、是否自动选择、默认类型、最终类型、选择来源、选模算法和原因 |
+| `debug.decision` | 命中决策的名称、置信度、规则、关键词、优先级、算法和候选类型 |
+| `debug.matched_signals` | 各类信号命中的规则名称；`keyword_terms` 为实际命中的关键词 |
+| `debug.signal_confidences` | 信号置信度，保留两位小数 |
+| `debug.signal_values` | 信号原始数值，保留两位小数 |
+| `debug.projection_scores` | 投影评分，保留两位小数 |
+| `debug.prompt_compression` | 是否开启、是否执行压缩、状态、Token 数量、压缩比例及使用原文的信号 |
+| `debug.context` | 上下文 Token 数、文本字节数、各角色消息数、工具数量和最后一条消息的角色 |
+| `debug.timings` | 请求处理及各阶段耗时，单位为毫秒，最多保留三位小数 |
+
+`debug.routing.response_selection_method` 与顶层 `selection_method` 一致；`model_selection_method` 表示内部候选选择方式，例如 `single`、`static` 或 `default`。`reason` 的取值如下：
+
+| `reason` | 含义 |
+| --- | --- |
+| `decision_routing_selected_model` | 规则选出了类型 |
+| `auto_model_without_selected_model_used_default` | 自动选择未得到规则选出的类型，使用默认类型 |
+| `explicit_model_passthrough` | 保留请求直接指定的类型 |
+
+`debug.prompt_compression.status` 区分 `disabled`（关闭）、`max_tokens_unset`（开启但未设置有效 Token 预算）、`below_min_length`（未达到长度门槛）、`within_token_budget`（无需压缩）、`applied`（已执行压缩）和 `not_evaluated`（未进入压缩评估）。`enabled` 表示配置状态，`applied` 表示本次是否实际执行压缩。
+
+| 耗时字段 | 测量范围 |
+| --- | --- |
+| `total_ms` | 从请求体处理开始，到构建决策响应时 |
+| `request_parse_ms` | 请求内容快速提取 |
+| `pre_routing_ms` | 预路由处理，包含信号输入准备、信号评估、决策评估和候选选择 |
+| `signal_input_ms`、`prompt_compression_ms` | 信号输入准备及其中的提示压缩 |
+| `signal_evaluation_ms`、`signals` | 信号评估总耗时，以及各类信号的耗时明细 |
+| `decision_evaluation_ms` | 决策规则评估 |
+| `model_selection_ms` | 命中决策后的候选选择 |
+
+这些耗时存在包含关系，信号也可能并行执行，因此不能直接相加得到总耗时。零值耗时字段会省略，耗时低于计时精度时也可能省略。未命中信号的列表返回空数组；没有相应结果时，评分字段省略。
+
+消息和工具统计来自已解析的请求，即使没有配置决策规则或消息内容为空，也会记录实际数量。可选的信号评分、耗时、压缩比例和候选权重出现 `NaN` 或无穷大时，对应数值会省略，避免这些附加信息影响有效决策结果的返回。
 
 ## 错误和主动跳过行为
 
@@ -135,18 +176,24 @@ Decision-Only 不改变两条原有的主动跳过路径：
 
 | 文件 | 新增行数 | 删除行数 | 改动内容 |
 | --- | ---: | ---: | --- |
-| `processor_req_body_decision_only.go` | 108 | 0 | 新增模式判断、最终结果整理、JSON 响应构建 |
-| `processor_req_body.go` | 3 | 0 | 决策完成后直接返回 JSON |
+| `processor_req_body_decision_only.go` | 111 | 0 | 模式判断、最终结果整理、JSON 响应构建 |
+| `processor_req_body_decision_debug.go` | 304 | 0 | 记录消息统计、计算耗时、处理异常调试数值并组装调试信息 |
+| `processor_req_body_decision_debug_types.go` | 136 | 0 | 定义调试 JSON 字段和耗时数据结构 |
+| `processor_req_body.go` | 7 | 0 | 请求提取和预路由计时、直接返回决策 JSON |
 | `processor_req_body_prepare.go` | 10 | 5 | 在后续插件处理前返回选模结果 |
-| 合计 | 121 | 5 | 净增加 116 行 |
+| `req_filter_classification.go` | 8 | 0 | 记录信号输入、压缩信息及提前返回场景的消息统计 |
+| `req_filter_classification_runtime.go` | 10 | 0 | 记录信号、决策和候选选择耗时及命中依据 |
+| `req_filter_classification_signal.go` | 66 | 6 | 记录压缩状态、耗时和实际命中关键词 |
+| `request_context.go` | 8 | 0 | 保存本次请求的调试信息 |
+| 合计 | 660 | 11 | 净增加 649 行 |
 
-以上三个文件均位于 `src/semantic-router/pkg/extproc/`。
+以上文件均位于 `src/semantic-router/pkg/extproc/`。
 
 配置配套改动位于 `src/semantic-router/pkg/config/` 的 `config.go`、`canonical_global.go`、`canonical_defaults.go` 和 `canonical_export.go`，分别负责运行时字段、加载、默认值及导出；`config/config.yaml` 增加关闭状态的参考配置。
 
 ## 测试结果和复现
 
-新增 13 组测试，分布于以下文件：
+新增 21 组测试，分布于以下文件：
 
 | 测试文件 | 覆盖范围 |
 | --- | --- |
@@ -154,10 +201,11 @@ Decision-Only 不改变两条原有的主动跳过路径：
 | `pkg/extproc/processor_req_body_decision_only_test.go` | 模式判断、规则选择、默认兜底、直接指定、无端点返回、JSON 和原有响应头、错误响应 |
 | `pkg/extproc/processor_req_body_decision_only_flow_test.go` | 实际关键词规则与完整请求体处理、关闭模式、跳过后续插件、非法请求、SkipProcessing |
 | `pkg/extproc/processor_req_body_decision_only_grpc_test.go` | gRPC 请求头和请求体的完整交互、规则选择与兜底、无端点返回、`stream: true`、Looper 路径 |
+| `pkg/extproc/processor_req_body_decision_debug_test.go` | 调试 JSON、命中依据、候选信息、耗时、精度、空值、无规则及空内容的消息统计、异常数值、压缩状态、gRPC 调试信息及正常转发回归 |
 
 测试文件路径相对于 `src/semantic-router/`。gRPC 测试使用内存连接和真实请求处理器，不依赖运行中的后端模型。
 
-验证结果：配置包全量测试通过；Decision-Only 单元与 gRPC 集成测试通过，竞态检查通过；仓库 manifest 校验、Go 结构检查和参考配置检查通过。Docker 镜像构建及实际部署验证尚未执行。
+验证结果：Go 路由器构建、仓库默认 Go 测试及 `agent-ci-gate` 通过；Decision-Only 单元与 gRPC 集成测试通过，竞态检查通过。Docker 镜像构建及实际部署验证尚未执行。
 
 准备 Go 1.24.1、C 编译器和本仓库所需的 Candle、ML、NLP 原生绑定库后，可在仓库根目录执行：
 

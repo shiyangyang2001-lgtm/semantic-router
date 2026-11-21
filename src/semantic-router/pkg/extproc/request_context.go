@@ -151,6 +151,14 @@ type RequestContext struct {
 	VSRSignalValues        map[string]float64
 	VSRProjectionTrace     *projectiontrace.Trace
 
+	// Decision-Only diagnostics captured during routing evaluation.
+	VSRMatchedKeywordTerms     []string
+	VSRDecisionMatchedRules    []string
+	VSRDecisionMatchedKeywords []string
+	VSRPromptCompression       promptCompressionRuntimeInfo
+	VSRSignalMetrics           *classification.SignalMetricsCollection
+	VSRDecisionTimings         requestDecisionTimingInfo
+
 	// Hallucination mitigation tracking
 	FactCheckNeeded           bool                       // Result of fact-check classification
 	FactCheckConfidence       float32                    // Confidence score of fact-check classification

@@ -24,6 +24,10 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, history s
 	var reasoningDecision entropy.ReasoningDecision
 	var selectedModel string
 
+	if ctx != nil && r.decisionOnlyModeEnabled() {
+		ctx.VSRConversationFacts = decisionOnlyConversationFacts(history)
+	}
+
 	// Check if there's content to evaluate
 	if len(history.nonUserMessages) == 0 && history.currentUserMessage == "" {
 		return "", 0.0, entropy.ReasoningDecision{}, "", nil
@@ -38,8 +42,12 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, history s
 		return "", 0.0, entropy.ReasoningDecision{}, "", nil
 	}
 
+	signalInputStart := time.Now()
 	signalInput := r.prepareSignalEvaluationInput(history)
+	ctx.VSRDecisionTimings.SignalInputMs = elapsedMilliseconds(signalInputStart)
+	ctx.VSRDecisionTimings.PromptCompressionMs = signalInput.compressionInfo.DurationMs
 	ctx.VSRConversationFacts = signalInput.conversationFacts
+	ctx.VSRPromptCompression = signalInput.compressionInfo
 	if signalInput.evaluationText == "" {
 		return "", 0.0, entropy.ReasoningDecision{}, "", nil
 	}

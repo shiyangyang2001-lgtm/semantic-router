@@ -28,6 +28,8 @@ type selectedModelDecisionPayload struct {
 	Decision        string   `json:"decision,omitempty"`
 	Category        string   `json:"category,omitempty"`
 	Confidence      *float64 `json:"confidence,omitempty"`
+
+	Debug *decisionOnlyDebugPayload `json:"debug,omitempty"`
 }
 
 func (r *OpenAIRouter) decisionOnlyModeEnabled() bool {
@@ -49,6 +51,7 @@ func (r *OpenAIRouter) buildDecisionOnlySelectedModelResponse(
 		SelectionMethod: selectionMethod,
 		SelectedModel:   selectedModel,
 		Decision:        state.decisionName,
+		Debug:           r.buildDecisionOnlyDebugPayload(originalModel, selectedModel, selectionMethod, ctx),
 	}
 	setHeaders := []*core.HeaderValueOption{
 		newHeaderValueOption("content-type", "application/json"),

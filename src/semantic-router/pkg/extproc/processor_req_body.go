@@ -47,7 +47,9 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
 		return validationResp, nil
 	}
 
+	parseStart := time.Now()
 	fast, err := r.extractFastRequestState(requestBody, ctx)
+	ctx.VSRDecisionTimings.RequestParseMs = elapsedMilliseconds(parseStart)
 	if validationResp := r.validationResponseFromRequestError(err); validationResp != nil {
 		return validationResp, nil
 	}
@@ -70,7 +72,9 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
 	ctx.UserContent = fast.UserContent
 	ctx.RequestImageURL = fast.FirstImageURL
 
+	preRoutingStart := time.Now()
 	decisionState, earlyResponse := r.runRequestPreRoutingStages(originalModel, fast, ctx)
+	ctx.VSRDecisionTimings.PreRoutingMs = elapsedMilliseconds(preRoutingStart)
 	if earlyResponse != nil {
 		return earlyResponse, nil
 	}
